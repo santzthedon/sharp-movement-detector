@@ -31,18 +31,62 @@ function flagKey(f: FlaggedMove): string {
   return `${f.fixtureId}|${f.market}|${f.selection}|${f.windowEnd}`;
 }
 
+// Rolling per-fixture tick buffer. In-play TxLINE volume is heavy (tens of
+// thousands of records per 5-minute bucket), so re-walking the whole
+// trailing window every poll makes polls outlast the poll interval and
+// pile up. Instead: walk the full window once at startup, then only fetch
+// from just before the newest buffered tick.
+const buffers = new Map<string, OddsPoint[]>();
+let polling = false;
+
 async function pollOnce(jwt: string, apiToken: string) {
+  if (polling) return; // previous poll still in flight - don't stack
+  polling = true;
+  try {
+    await pollAll(jwt, apiToken);
+  } finally {
+    polling = false;
+  }
+}
+
+async function pollAll(jwt: string, apiToken: string) {
   for (const fixtureId of FIXTURE_IDS) {
-    let odds: OddsPoint[];
+    const windowMs = WINDOW_MINUTES * 60_000;
+    const buffer = buffers.get(fixtureId) ?? [];
+    // Twice the detection window of trailing history is enough for the
+    // detector to see any swing that completes within windowMs.
+    const sinceMs =
+      buffer.length > 0
+        ? buffer[buffer.length - 1].timestamp - 60_000 // small overlap for safety
+        : Date.now() - 2 * windowMs;
+
+    let fresh: OddsPoint[];
     try {
-      // Twice the detection window of trailing history is enough for the
-      // detector to see any swing that completes within windowMs.
-      const sinceMs = Date.now() - 2 * WINDOW_MINUTES * 60_000;
-      odds = await fetchRecentOdds(fixtureId, sinceMs, jwt, apiToken);
+      fresh = await fetchRecentOdds(fixtureId, sinceMs, jwt, apiToken);
     } catch (err: any) {
       console.error(`Fetch failed for ${fixtureId}:`, err?.response?.data || err.message);
       continue;
     }
+
+    const seenTicks = new Set(buffer.map((p) => `${p.market}|${p.selection}|${p.timestamp}`));
+    for (const p of fresh) {
+      if (!seenTicks.has(`${p.market}|${p.selection}|${p.timestamp}`)) buffer.push(p);
+    }
+    buffer.sort((a, b) => a.timestamp - b.timestamp);
+    const cutoff = Date.now() - 2 * windowMs;
+    const odds = buffer.filter((p) => p.timestamp >= cutoff);
+    buffers.set(fixtureId, odds);
+
+    // Heartbeat: latest implied probability per selection, so a quiet
+    // (flag-free) poll still visibly proves the watcher is alive.
+    const latest = new Map<string, OddsPoint>();
+    for (const p of odds) latest.set(p.selection, p);
+    const snapshot = [...latest.values()]
+      .map((p) => `${p.selection} ${(100 / p.decimalOdds).toFixed(1)}%`)
+      .join(" | ");
+    console.log(
+      `[${new Date().toISOString()}] ${fixtureId}: ${odds.length} ticks in window | ${snapshot || "no data"}`
+    );
 
     const flags = detectSharpMoves(odds, {
       windowMs: WINDOW_MINUTES * 60_000,
