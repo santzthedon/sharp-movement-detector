@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+wallet-devnet.json
+.cache/
+backtest-report.json
+.DS_Store
