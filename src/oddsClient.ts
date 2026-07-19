@@ -100,6 +100,8 @@ export async function fetchFixtures(
  * Pulls odds updates for one fixture across a time range by walking the
  * historical 5-minute interval route. ~12 requests per hour of range.
  */
+const FETCH_CONCURRENCY = Number(process.env.FETCH_CONCURRENCY || 6);
+
 export async function fetchOddsRange(
   fixtureId: string,
   fromMs: number,
@@ -108,54 +110,74 @@ export async function fetchOddsRange(
   apiToken: string,
   opts: { allMarkets?: boolean } = {}
 ): Promise<OddsPoint[]> {
-  const points: OddsPoint[] = [];
+  const buckets: number[] = [];
   for (let t = Math.floor(fromMs / FIVE_MIN_MS) * FIVE_MIN_MS; t <= toMs; t += FIVE_MIN_MS) {
-    const epochDay = Math.floor(t / DAY_MS);
-    const hourOfDay = Math.floor((t % DAY_MS) / HOUR_MS);
-    const interval = Math.floor((t % HOUR_MS) / FIVE_MIN_MS);
-    try {
-      const res = await axios.get(
-        `${API_BASE}/odds/updates/${epochDay}/${hourOfDay}/${interval}`,
-        { params: { fixtureId }, headers: authHeaders(jwt, apiToken) }
-      );
-      points.push(...normalizeOddsPayloads(res.data));
-    } catch (err: any) {
-      // Intervals with no stored data can 404/500 - skip, keep walking.
-      if (![404, 500].includes(err?.response?.status)) throw err;
-    }
+    buckets.push(t);
   }
+  const points: OddsPoint[] = [];
+  // Small worker pool: bulk backfills walk ~80 buckets per fixture, and
+  // sequential fetching makes a 100-fixture backfill take hours.
+  let next = 0;
+  const worker = async () => {
+    while (next < buckets.length) {
+      const t = buckets[next++];
+      const epochDay = Math.floor(t / DAY_MS);
+      const hourOfDay = Math.floor((t % DAY_MS) / HOUR_MS);
+      const interval = Math.floor((t % HOUR_MS) / FIVE_MIN_MS);
+      try {
+        const res = await axios.get(
+          `${API_BASE}/odds/updates/${epochDay}/${hourOfDay}/${interval}`,
+          { params: { fixtureId }, headers: authHeaders(jwt, apiToken) }
+        );
+        points.push(...normalizeOddsPayloads(res.data));
+      } catch (err: any) {
+        // Intervals with no stored data can 404/500 - skip, keep walking.
+        if (![404, 500].includes(err?.response?.status)) throw err;
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(FETCH_CONCURRENCY, buckets.length) }, worker)
+  );
+  points.sort((a, b) => a.timestamp - b.timestamp);
   logMarketInventory(points);
   return opts.allMarkets ? points : points.filter((p) => MARKET_RE.test(p.market));
 }
 
 /**
  * Full odds history for a completed fixture. Resolves the fixture's time
- * window from its score updates, then walks the odds intervals from
- * PREMATCH_HOURS before kickoff to the last score update.
+ * window from its score updates when those still exist (scores retention
+ * is ~2 weeks), else from `startTimeHint` (kickoff time from the fixtures
+ * feed, whose retention covers the whole tournament).
  */
 export async function fetchOddsHistory(
   fixtureId: string,
   jwt: string,
-  apiToken: string
+  apiToken: string,
+  startTimeHint?: number
 ): Promise<OddsPoint[]> {
-  const scores = await fetchScoresHistorical(fixtureId, jwt, apiToken);
-  if (scores.length === 0) {
+  const cached = readOddsCache(fixtureId);
+  if (cached) return cached.filter((p) => MARKET_RE.test(p.market));
+
+  let startTime: number;
+  let lastTs: number;
+  const scores = await fetchScoresHistorical(fixtureId, jwt, apiToken).catch(() => []);
+  if (scores.length > 0) {
+    startTime = Number(scores[0].StartTime);
+    lastTs = Math.max(...scores.map((s: any) => Number(s.Ts)));
+  } else if (startTimeHint) {
+    startTime = startTimeHint;
+    // No score updates to bound the end - 3h after kickoff covers 90min +
+    // stoppage + halftime with margin (the regulation 1x2 market settles
+    // at the final whistle regardless).
+    lastTs = startTimeHint + 3 * HOUR_MS;
+  } else {
     throw new Error(
-      `No historical scores for fixture ${fixtureId} - the endpoint only covers ` +
-        `fixtures that started between six hours and two weeks ago.`
+      `No historical scores for fixture ${fixtureId} (retention is ~2 weeks) and no ` +
+        `startTimeHint provided - pass the kickoff time from the fixtures feed.`
     );
   }
-  const startTime = Number(scores[0].StartTime);
-  const lastTs = Math.max(...scores.map((s: any) => Number(s.Ts)));
 
-  // Completed fixtures' history is immutable, so cache it on disk - walking
-  // ~60 five-minute buckets per fixture is by far the slowest part of a
-  // backtest, and caching makes parameter-tuning reruns near-instant.
-  const cacheFile = path.join(".cache", `odds-${fixtureId}-h${PREMATCH_HOURS}.json`);
-  if (fs.existsSync(cacheFile)) {
-    const cached: OddsPoint[] = JSON.parse(fs.readFileSync(cacheFile, "utf-8"));
-    return cached.filter((p) => MARKET_RE.test(p.market));
-  }
   const points = await fetchOddsRange(
     fixtureId,
     startTime - PREMATCH_HOURS * HOUR_MS,
@@ -164,9 +186,49 @@ export async function fetchOddsHistory(
     apiToken,
     { allMarkets: true }
   );
-  fs.mkdirSync(".cache", { recursive: true });
-  fs.writeFileSync(cacheFile, JSON.stringify(points));
+  writeOddsCache(fixtureId, points);
   return points.filter((p) => MARKET_RE.test(p.market));
+}
+
+// Completed fixtures' history is immutable, so cache it on disk - walking
+// ~80 five-minute buckets per fixture is by far the slowest part of a
+// backtest, and caching makes parameter-tuning reruns near-instant.
+function cachePath(fixtureId: string): string {
+  return path.join(".cache", `odds-${fixtureId}-h${PREMATCH_HOURS}.json`);
+}
+
+function readOddsCache(fixtureId: string): OddsPoint[] | undefined {
+  const file = cachePath(fixtureId);
+  if (!fs.existsSync(file)) return undefined;
+  return JSON.parse(fs.readFileSync(file, "utf-8"));
+}
+
+function writeOddsCache(fixtureId: string, points: OddsPoint[]) {
+  fs.mkdirSync(".cache", { recursive: true });
+  fs.writeFileSync(cachePath(fixtureId), JSON.stringify(points));
+}
+
+/**
+ * Fallback result source for fixtures older than the scores retention
+ * window: at the final whistle the in-play 1x2 market has converged on the
+ * outcome (the winner trades at ~100%), so the last in-play ticks label
+ * the fixture. Returns undefined when the market never converged (feed
+ * stopped early / suspended) rather than guessing. The backtest
+ * cross-validates this method against official scores on every fixture
+ * where both are available.
+ */
+export function deriveResultFromOdds(points: OddsPoint[]): FixtureResult | undefined {
+  const finals = new Map<string, OddsPoint>();
+  for (const p of points) {
+    if (p.inRunning) finals.set(p.selection, p); // points are time-sorted
+  }
+  if (finals.size === 0) return undefined;
+  let best: OddsPoint | undefined;
+  for (const p of finals.values()) {
+    if (!best || 1 / p.decimalOdds > 1 / best.decimalOdds) best = p;
+  }
+  if (!best || 1 / best.decimalOdds < 0.8) return undefined; // never converged
+  return { fixtureId: best.fixtureId, winningSelection: best.selection };
 }
 
 /**

@@ -23,16 +23,27 @@
  * and BACKTEST_FIXTURE_IDS (from `npm run fixtures`).
  */
 import * as fs from "fs";
+import * as path from "path";
 import * as dotenv from "dotenv";
 dotenv.config();
-import { fetchOddsHistory, fetchFixtureResult } from "./oddsClient";
+import {
+  fetchOddsHistory,
+  fetchFixtureResult,
+  fetchFixtures,
+  deriveResultFromOdds,
+} from "./oddsClient";
 import { detectSharpMoves } from "./detector";
 import { BacktestRow, OddsPoint } from "./types";
 
+// Explicit list, or "auto" / empty = every completed fixture in the
+// competition within the lookback window.
 const FIXTURE_IDS = (process.env.BACKTEST_FIXTURE_IDS || "")
   .split(",")
   .map((s) => s.trim())
-  .filter(Boolean);
+  .filter((s) => s && s !== "auto");
+const COMPETITION_ID = Number(process.env.COMPETITION_ID || 72);
+const LOOKBACK_DAYS = Number(process.env.BACKTEST_LOOKBACK_DAYS || 45);
+const DAY_MS = 86_400_000;
 
 const WINDOW_MINUTES = Number(process.env.WINDOW_MINUTES || 60);
 const PROBABILITY_THRESHOLD = Number(process.env.PROBABILITY_THRESHOLD || 0.02);
@@ -80,29 +91,78 @@ async function main() {
       "Set TXLINE_GUEST_JWT and TXLINE_API_TOKEN in .env (run `npm run auth` first)."
     );
   }
-  if (FIXTURE_IDS.length === 0) {
-    throw new Error(
-      "Set BACKTEST_FIXTURE_IDS in .env - comma-separated list of completed fixture IDs to test against."
+  // Resolve the fixture universe: explicit IDs, or auto-discover every
+  // completed fixture in the competition.
+  let targets: { fixtureId: string; startTime?: number; label: string }[];
+  if (FIXTURE_IDS.length > 0) {
+    targets = FIXTURE_IDS.map((id) => ({ fixtureId: id, label: id }));
+  } else {
+    const startEpochDay = Math.floor(Date.now() / DAY_MS) - LOOKBACK_DAYS;
+    const fixtures = await fetchFixtures(jwt, apiToken, startEpochDay, COMPETITION_ID);
+    const cutoff = Date.now() - 4 * 3_600_000; // kicked off >4h ago = finished
+    targets = fixtures
+      .filter((f) => f.startTime < cutoff)
+      .sort((a, b) => a.startTime - b.startTime)
+      .map((f) => ({
+        fixtureId: f.fixtureId,
+        startTime: f.startTime,
+        label: `${f.participant1} vs ${f.participant2}`,
+      }));
+    console.log(
+      `Auto-discovered ${targets.length} completed fixtures (competition ${COMPETITION_ID}, ` +
+        `last ${LOOKBACK_DAYS} days).`
     );
   }
 
   const rows: BacktestRow[] = [];
+  let scoresResults = 0;
+  let oddsResults = 0;
+  let crossChecked = 0;
+  let crossAgreed = 0;
+  let skipped = 0;
 
-  for (const fixtureId of FIXTURE_IDS) {
-    console.log(`Fetching odds history for ${fixtureId}...`);
-    let odds: OddsPoint[], result;
+  for (const [i, target] of targets.entries()) {
+    const { fixtureId, startTime, label } = target;
+    console.log(`[${i + 1}/${targets.length}] ${label} (${fixtureId})...`);
+    let odds: OddsPoint[];
     try {
-      odds = await fetchOddsHistory(fixtureId, jwt, apiToken);
-      result = await fetchFixtureResult(fixtureId, jwt, apiToken);
+      odds = await fetchOddsHistory(fixtureId, jwt, apiToken, startTime);
     } catch (err: any) {
-      console.error(
-        `  Skipping ${fixtureId}: ${err?.response?.status ?? ""} ${err?.message ?? err}`
-      );
+      console.error(`  skipping: ${err?.response?.status ?? ""} ${err?.message ?? err}`);
+      skipped++;
       continue;
     }
 
+    // Result: official scores when retention allows, else derived from the
+    // converged in-play odds. When both exist, cross-validate the fallback.
+    const official = await fetchFixtureResult(fixtureId, jwt, apiToken).catch(() => undefined);
+    const derived = deriveResultFromOdds(odds);
+    if (official && derived) {
+      crossChecked++;
+      if (official.winningSelection === derived.winningSelection) crossAgreed++;
+    }
+    const result = official ?? derived;
+    if (!result) {
+      console.error(`  skipping: no official score and odds never converged`);
+      skipped++;
+      continue;
+    }
+    official ? scoresResults++ : oddsResults++;
+    fs.mkdirSync(".cache", { recursive: true });
+    fs.writeFileSync(
+      path.join(".cache", `result-${fixtureId}.json`),
+      JSON.stringify({
+        winningSelection: result.winningSelection,
+        source: official ? "scores" : "odds-derived",
+        label,
+      })
+    );
+
     const prematch = odds.filter((p) => !p.inRunning).length;
-    console.log(`  ${odds.length} odds ticks (${prematch} pre-match, ${odds.length - prematch} in-play)`);
+    console.log(
+      `  ${odds.length} ticks (${prematch} pre-match) | winner ${result.winningSelection} ` +
+        `(${official ? "official" : "odds-derived"})`
+    );
 
     // Per-selection series for reference-price lookups.
     const bySelection = new Map<string, OddsPoint[]>();
@@ -139,6 +199,11 @@ async function main() {
   const inplay = rows.filter((r) => r.regime === "in-play");
 
   console.log("\n--- Sharp Movement Detector: Backtest Report ---");
+  console.log(
+    `Fixtures: ${scoresResults + oddsResults} scored (${scoresResults} official results, ` +
+      `${oddsResults} odds-derived), ${skipped} skipped | ` +
+      `odds-derived validation: ${crossAgreed}/${crossChecked} agree with official scores`
+  );
   console.log(
     `Window ${WINDOW_MINUTES}min | floor ${(PROBABILITY_THRESHOLD * 100).toFixed(1)}pp | ` +
       `z-score ${Z_SCORE || "off"} | in-play CLV horizon ${CLV_HORIZON_MINUTES}min\n`

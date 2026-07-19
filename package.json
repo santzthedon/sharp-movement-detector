@@ -13,6 +13,7 @@
     "auth": "ts-node src/auth.ts",
     "fixtures": "ts-node src/fixtures.ts",
     "backtest": "ts-node src/backtest.ts",
+    "tune": "ts-node src/tune.ts",
     "live": "ts-node src/live.ts"
   },
   "dependencies": {

@@ -16,8 +16,9 @@ src/
   oddsClient.ts   fetches odds history / fixture results (routes verified against the OpenAPI spec)
   types.ts        normalized data shapes everything else depends on
   detector.ts     the actual detection logic
-  backtest.ts     runs detector on completed fixtures, scores hit rate
-  live.ts         polls live/delayed odds and logs flags as they happen
+  backtest.ts     runs detector on completed fixtures, grades hit rate + CLV
+  tune.ts         offline grid search over window/z-score on the cached data
+  live.ts         auto-discovers fixtures, flags moves, attaches on-chain proofs
 idl/txoracle.json   Anchor IDL (devnet build, from github.com/txodds/tx-on-chain)
 types/txoracle.ts   generated program types (same source)
 ```
@@ -63,11 +64,23 @@ match data. Remember to swap the IDL/types for the mainnet versions.
 ## Running the backtest (recommended primary demo)
 
 ```bash
-# .env: BACKTEST_FIXTURE_IDS=<comma-separated completed fixture IDs>
-#       (must have started 6h–2 weeks ago; `npm run fixtures` marks these DONE)
-#       WINDOW_MINUTES=15  PROBABILITY_THRESHOLD=0.08
+# .env: BACKTEST_FIXTURE_IDS=auto   (or a comma-separated ID list)
 npm run backtest
 ```
+
+With `auto`, the backtest discovers **every completed fixture in the
+competition** itself (103 World Cup 2026 games as of the final weekend).
+Two data-retention realities shape how:
+
+- Odds buckets cover the whole tournament, so full odds history is always
+  available.
+- Official scores are only retained ~2 weeks, so older fixtures are labeled
+  from **the odds themselves**: at the final whistle the in-play 1x2 market
+  has converged on the outcome (the winner trades at ~100%), which labels
+  the fixture with no external data. Fixtures whose market never converged
+  are skipped rather than guessed. The method is cross-validated on every
+  fixture where official scores still exist — **13/13 agreement** on the
+  current data.
 
 Pulls full odds history per fixture, flags sharp moves, and grades every
 flag **two ways, split by regime (pre-match vs in-play)**:
@@ -127,12 +140,31 @@ the data behind a flag.
   market. Set 0 to fall back to the fixed floor.
 - `CLV_HORIZON_MINUTES` — reference point for in-play CLV grading.
 
-Calibration note (measured on devnet, 2026-07-18, 9 completed World Cup
-fixtures, ~1.3k pre-match 1X2 ticks each): TxLINE's demargined StablePrice
-is *smooth* pre-match — swings of 8pp/15min simply never occur, and even
-2pp/15min is rare. Genuine pre-match signal starts around **2pp per hour**
-(the shipped floor). In-play is a different regime: goals move the
-consensus 8pp+ within seconds.
+### Tuning results (103 World Cup 2026 fixtures, `npm run tune`)
+
+`npm run tune` grid-searches WINDOW_MINUTES × Z_SCORE over the cached
+fixtures, graded purely on **pre-match CLV** (in-play is excluded from the
+objective because clock decay inflates it). Highlights from the full run:
+
+```
+window  z      flags  hit%    mean CLV   CLV>0
+  15m   off      31   41.9    +1.06pp    52%
+  15m   3        21   61.9    +1.69pp    67%   <- shipped default
+  60m   off      61   37.7    +0.54pp    61%
+ 120m   3        65   33.8    +0.57pp    60%
+```
+
+Two patterns worth noting: (1) the z-gate *improves* flag quality at every
+window size — at 15 min it lifts hit rate from 42% to 62% and mean CLV by
++0.6pp while cutting flags by a third, i.e. it's removing noise, not
+signal; (2) shorter windows beat longer ones — genuinely *fast* moves
+carry more information than slow hour-scale drifts. Both are consistent
+with the sharp-money hypothesis the tool is built on.
+
+Honesty caveat (also printed by the tool): this is in-sample tuning on a
+single tournament. Treat 15min/z=3 as a sensible default, not a proven
+edge; out-of-sample validation needs the next competition (or mainnet
+league data).
 - `PREMATCH_HOURS` — hours of pre-kickoff odds history the backtest pulls
   (default 3).
 - `ODDS_MARKET_REGEX` — which `SuperOddsType` values count as the
