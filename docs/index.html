@@ -1,0 +1,120 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sharp Movement Detector - World Cup 2026 Replay</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root { --bg:#0d1117; --card:#161b22; --border:#30363d; --text:#e6edf3; --dim:#8b949e;
+          --p1:#58a6ff; --draw:#8b949e; --p2:#f78166; --flag:#d29922; --good:#3fb950; --bad:#f85149; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--text); font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; padding:20px; max-width:1100px; margin:0 auto; }
+  h1 { font-size:18px; }
+  .sub { color:var(--dim); font-size:12px; margin:4px 0 16px; }
+  .stats { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:16px; }
+  .stat { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:8px 14px; font-size:12px; color:var(--dim); }
+  .stat b { display:block; font-size:16px; color:var(--text); }
+  .picker { display:flex; gap:8px; margin-bottom:14px; align-items:center; flex-wrap:wrap; }
+  select,button { background:var(--card); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font:inherit; }
+  select { flex:1; min-width:260px; }
+  button { cursor:pointer; } button:hover { border-color:var(--dim); }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:16px; margin-bottom:14px; }
+  .row { display:flex; gap:16px; flex-wrap:wrap; align-items:baseline; margin-bottom:8px; }
+  .p1 { color:var(--p1); } .draw { color:var(--draw); } .p2 { color:var(--p2); }
+  .winner { color:var(--good); }
+  svg { width:100%; height:280px; display:block; }
+  .flag { border-left:3px solid var(--flag); padding:6px 10px; margin-bottom:8px; background:var(--bg);
+          border-radius:0 6px 6px 0; font-size:13px; }
+  .chip { font-size:11px; padding:1px 7px; border-radius:10px; margin-right:6px; }
+  .hit { background:#12261e; color:var(--good); } .miss { background:#2c1517; color:var(--bad); }
+  .reg { background:#21262d; color:var(--dim); }
+  .empty { color:var(--dim); padding:20px; text-align:center; }
+  a { color:var(--p1); }
+  .foot { color:var(--dim); font-size:12px; margin-top:18px; }
+</style></head><body>
+<h1>Sharp Movement Detector</h1>
+<div class="sub" id="sub">World Cup 2026 replay explorer - loading...</div>
+<div class="stats" id="stats"></div>
+<div class="picker">
+  <button id="prev">&larr;</button>
+  <select id="pick"></select>
+  <button id="next">&rarr;</button>
+</div>
+<div class="card">
+  <div class="row" id="head"></div>
+  <div id="chart"></div>
+  <div style="color:var(--dim);font-size:11px;margin-top:6px">
+    <span class="p1">&#9632; part1</span>&nbsp; <span class="draw">&#9632; draw</span>&nbsp;
+    <span class="p2">&#9632; part2</span>&nbsp; <span style="color:var(--flag)">&#9679; flagged move</span>&nbsp;
+    <span style="color:var(--dim)">&#9482; kickoff</span></div>
+</div>
+<h2 style="font-size:14px;margin-bottom:10px">Flags in this match</h2>
+<div id="flags"></div>
+<div class="foot">Detector: <span id="settings"></span> &middot; pre-match flags graded vs the closing line, in-play vs the price 30min later
+&middot; <a href="https://github.com/santzthedon/sharp-movement-detector">github.com/santzthedon/sharp-movement-detector</a><br>
+The live agent (auto-discovery, on-chain proofs, live dashboard) runs locally with <b>npm run live</b> - this page replays its detector over the full cached tournament.</div>
+<script>
+const COLORS={part1:"#58a6ff",draw:"#8b949e",part2:"#f78166"};
+let DATA=null, idx=0;
+const pctm=x=>(x/10).toFixed(1)+"%";
+function chart(f){
+  const sels=Object.entries(f.series).filter(([,s])=>s.length>1);
+  if(!sels.length) return "<div class='empty'>no series</div>";
+  let t0=Infinity,t1=-Infinity,lo=1000,hi=0;
+  for(const [,s] of sels){ t0=Math.min(t0,s[0][0]); t1=Math.max(t1,s[s.length-1][0]);
+    for(const p of s){ lo=Math.min(lo,p[1]); hi=Math.max(hi,p[1]); } }
+  const pad=Math.max(20,(hi-lo)*0.12); lo=Math.max(0,lo-pad); hi=Math.min(1000,hi+pad);
+  const W=1040,H=280,dx=t1-t0||1,dy=hi-lo||1;
+  const X=t=>(t-t0)/dx*W, Y=p=>H-(p-lo)/dy*H;
+  let out="<svg viewBox='0 0 "+W+" "+H+"' preserveAspectRatio='none'>";
+  for(const fr of [0.25,0.5,0.75]){ const v=lo+fr*dy;
+    out+="<line x1='0' y1='"+Y(v).toFixed(1)+"' x2='"+W+"' y2='"+Y(v).toFixed(1)+"' stroke='#21262d'/>"+
+         "<text x='4' y='"+(Y(v)-4).toFixed(1)+"' fill='#484f58' font-size='11'>"+(v/10).toFixed(0)+"%</text>"; }
+  if(f.kickoff) out+="<line x1='"+X(f.kickoff).toFixed(1)+"' y1='0' x2='"+X(f.kickoff).toFixed(1)+"' y2='"+H+"' stroke='#484f58' stroke-dasharray='4 4'/>";
+  for(const [sel,s] of sels){
+    const d=s.map((p,i)=>(i?"L":"M")+X(p[0]).toFixed(1)+","+Y(p[1]).toFixed(1)).join("");
+    out+="<path d='"+d+"' fill='none' stroke='"+(COLORS[sel]||"#fff")+"' stroke-width='1.7'/>";
+  }
+  for(const fl of f.flags)
+    out+="<circle cx='"+X(fl.t).toFixed(1)+"' cy='"+Y(fl.to).toFixed(1)+"' r='4.5' fill='#d29922' stroke='#0d1117'/>";
+  return out+"</svg>";
+}
+function render(){
+  const f=DATA.fixtures[idx];
+  document.getElementById("pick").value=idx;
+  document.getElementById("head").innerHTML=
+    "<b style='font-size:16px'>"+f.label+"</b>"+
+    "<span class='winner'>winner: "+f.winner+"</span>"+
+    "<span style='color:var(--dim);font-size:12px'>"+new Date(f.start*1000).toUTCString().slice(0,22)+
+    " &middot; result "+f.source+" &middot; "+f.flags.length+" flag(s)</span>";
+  document.getElementById("chart").innerHTML=chart(f);
+  document.getElementById("flags").innerHTML=f.flags.length?f.flags.map(fl=>
+    "<div class='flag'><span class='chip "+(fl.hit?"hit'>HIT":"miss'>MISS")+"</span>"+
+    "<span class='chip reg'>"+(fl.play?"in-play":"pre-match")+"</span>"+
+    "<b>"+fl.sel+"</b> "+pctm(fl.from)+" &rarr; "+pctm(fl.to)+" over "+fl.mins+" min"+
+    (fl.z?" (z="+fl.z+")":"")+
+    (fl.clv!=null?" &middot; CLV "+(fl.clv>=0?"+":"")+(fl.clv/10).toFixed(1)+"pp":"")+
+    "<div style='color:var(--dim);font-size:11px'>"+new Date(fl.t*1000).toUTCString().slice(17,25)+" UTC</div></div>"
+  ).join(""):"<div class='empty'>No sharp moves flagged in this match - most matches are quiet. That selectivity is the point.</div>";
+}
+async function boot(){
+  DATA=await (await fetch("data.json")).json();
+  const s=DATA.summary;
+  document.getElementById("sub").textContent=
+    "World Cup 2026 replay explorer - every flagged sharp move across the tournament, graded after the fact";
+  document.getElementById("settings").textContent=DATA.settings;
+  document.getElementById("stats").innerHTML=
+    "<div class='stat'>fixtures<b>"+s.fixtures+"</b></div>"+
+    "<div class='stat'>pre-match flags<b>"+s.pre+"</b></div>"+
+    "<div class='stat'>pre-match hit rate<b>"+s.preHitPct+"%</b></div>"+
+    "<div class='stat'>pre-match mean CLV<b>"+(s.preClvPp>=0?"+":"")+s.preClvPp+"pp</b></div>"+
+    "<div class='stat'>in-play flags<b>"+s.play+"</b></div>";
+  const pick=document.getElementById("pick");
+  pick.innerHTML=DATA.fixtures.map((f,i)=>
+    "<option value='"+i+"'>"+new Date(f.start*1000).toISOString().slice(5,10)+"  "+f.label+
+    (f.flags.length?" ("+f.flags.length+" flag"+(f.flags.length>1?"s":"")+")":"")+"</option>").join("");
+  pick.onchange=e=>{idx=Number(e.target.value);render();};
+  document.getElementById("prev").onclick=()=>{idx=(idx+DATA.fixtures.length-1)%DATA.fixtures.length;render();};
+  document.getElementById("next").onclick=()=>{idx=(idx+1)%DATA.fixtures.length;render();};
+  idx=DATA.fixtures.reduce((b,f,i)=>f.flags.length>DATA.fixtures[b].flags.length?i:b,0);
+  render();
+}
+boot();
+</script></body></html>

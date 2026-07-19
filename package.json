@@ -14,6 +14,7 @@
     "fixtures": "ts-node src/fixtures.ts",
     "backtest": "ts-node src/backtest.ts",
     "tune": "ts-node src/tune.ts",
+    "export:site": "ts-node src/exportSite.ts",
     "live": "ts-node src/live.ts"
   },
   "dependencies": {
