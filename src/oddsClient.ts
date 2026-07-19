@@ -196,6 +196,42 @@ export async function fetchRecentOdds(
   return historical.sort((a, b) => a.timestamp - b.timestamp);
 }
 
+// --- On-chain validation ---
+
+export interface OddsProof {
+  /** Merkle root of the batch this update belongs to (committed on-chain). */
+  batchRoot?: string;
+  /** Total proof nodes across sub-tree and main-tree branches. */
+  proofNodes: number;
+  raw: any;
+}
+
+/**
+ * Fetches the Merkle proof anchoring one odds update to the batch root
+ * TxODDS commits on Solana. This is what makes a flagged signal
+ * *verifiable*: the proof hashes reconstruct the on-chain root, so nobody
+ * (including us) can fabricate or backdate the tick a flag was based on.
+ */
+export async function fetchOddsProof(
+  messageId: string,
+  ts: number,
+  jwt: string,
+  apiToken: string
+): Promise<OddsProof> {
+  const res = await axios.get(`${API_BASE}/odds/validation`, {
+    params: { messageId, ts },
+    headers: authHeaders(jwt, apiToken),
+  });
+  const d = res.data ?? {};
+  const sub = Array.isArray(d.subTreeProof) ? d.subTreeProof.length : 0;
+  const main = Array.isArray(d.mainTreeProof) ? d.mainTreeProof.length : 0;
+  return {
+    batchRoot: d.summary?.oddsSubTreeRoot,
+    proofNodes: sub + main,
+    raw: d,
+  };
+}
+
 // --- Scores ---
 
 /**
@@ -283,6 +319,7 @@ function normalizeOddsPayloads(raw: any): OddsPoint[] {
         decimalOdds: 1 / prob,
         inRunning: Boolean(o.InRunning),
         bookmaker: o.Bookmaker,
+        messageId: o.MessageId,
       });
     });
   }

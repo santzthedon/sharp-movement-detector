@@ -69,44 +69,70 @@ match data. Remember to swap the IDL/types for the mainnet versions.
 npm run backtest
 ```
 
-Pulls full odds history per fixture, flags sharp moves, compares each one
-against the actual result, and writes `backtest-report.json` plus a console
-summary with an overall hit rate. This is the strongest thing to put in your
-demo video since it doesn't depend on anything happening live on camera —
-you can show, end to end, "here's a signal we flagged three weeks ago, and
-here's whether it was right."
+Pulls full odds history per fixture, flags sharp moves, and grades every
+flag **two ways, split by regime (pre-match vs in-play)**:
 
-By default the backtest scores **pre-match ticks only** (`PREMATCH_ONLY=true`):
-in-play consensus odds jump on every goal, so counting those would trivially
-inflate the hit rate. Set `PREMATCH_ONLY=false` to include them anyway.
+- **Hit rate** — did the flagged selection win? Intuitive but needs
+  hundreds of flags to mean anything (a correct 40%→48% signal still loses
+  most of the time).
+- **CLV (closing line value)** — did the market *keep moving* in the
+  flagged direction after the flag? Pre-match flags are graded against the
+  closing line (last pre-kickoff price); in-play flags against the price
+  `CLV_HORIZON_MINUTES` later. CLV grades against a continuous target, so
+  it's statistically meaningful at tens of flags — it's the metric
+  professional traders use to judge whether a signal has real information.
 
-## Running live (nice-to-have, on top of the backtest)
+The report prints the caveat with the numbers: in-play results are
+structurally flattered (a leading team's probability drifts toward 100% as
+the clock runs down), so **pre-match CLV is the honest measure of edge**.
+Everything is written to `backtest-report.json`.
+
+## Running live (fully autonomous)
 
 ```bash
-# .env: LIVE_FIXTURE_IDS=<fixture ID(s) currently in play>
 npm run live
 ```
 
-Polls every 60s (matching the free delayed tier) and logs new flags as they
-happen. Good for a few seconds of "and it also runs autonomously against
-live data" in the demo, but don't build your whole video around catching a
-move on camera — the backtest is the reliable evidence.
+With `LIVE_FIXTURE_IDS` empty (the default), the watcher **discovers
+fixtures itself**: it polls the fixtures feed, attaches to anything from
+`AUTODISCOVER_LEAD_MINUTES` before kickoff until ~4.5 h after, and detaches
+when done — zero manual input from deploy onward. Set `LIVE_FIXTURE_IDS`
+to pin an explicit list instead.
+
+Each poll (every 60 s, matching the free delayed tier) prints a heartbeat
+line with tick counts and current implied probabilities, so a quiet market
+is visibly different from a stalled process. When a move is flagged, the
+watcher also fetches the **on-chain Merkle proof** for the exact tick that
+completed the move (`/api/odds/validation`): the proof hashes reconstruct
+the batch root TxODDS commits on Solana, making every flagged signal
+independently verifiable — nobody, including us, can fabricate or backdate
+the data behind a flag.
 
 ## Tuning
 
 - `WINDOW_MINUTES` — how wide a trailing window counts as "fast." Smaller =
   stricter definition of a sharp move.
-- `PROBABILITY_THRESHOLD` — minimum swing in implied win probability within
-  that window to flag (`0.02` = 2 percentage points).
+- `PROBABILITY_THRESHOLD` — absolute floor on the swing (`0.02` = 2
+  percentage points).
+- `Z_SCORE` — the volatility-normalized threshold. A fixed threshold
+  assumes 2pp means the same thing everywhere; it doesn't — 2pp is an
+  earthquake in a liquid final that normally ranges 0.3pp/hour and routine
+  noise in a thin friendly ranging 1pp/hour. The detector therefore
+  measures each series' own *normal window range* (the **median** of past
+  window swings — median, not mean, so one genuine past move doesn't
+  redefine "normal"; and only windows fully *before* the current one, so a
+  move can't inflate its own baseline and hide itself) and flags only when
+  the swing is both ≥ the floor **and** ≥ `Z_SCORE` × that baseline. Flags
+  carry their z-score, so every alert says how abnormal it was for *that*
+  market. Set 0 to fall back to the fixed floor.
+- `CLV_HORIZON_MINUTES` — reference point for in-play CLV grading.
 
 Calibration note (measured on devnet, 2026-07-18, 9 completed World Cup
 fixtures, ~1.3k pre-match 1X2 ticks each): TxLINE's demargined StablePrice
 is *smooth* pre-match — swings of 8pp/15min simply never occur, and even
 2pp/15min is rare. Genuine pre-match signal starts around **2pp per hour**
-(the shipped default), which flagged 3 moves of which 2 called the winner.
-In-play is a different regime: goals move the consensus 8pp+ within
-seconds, which is exactly why `PREMATCH_ONLY=true` excludes them from the
-hit-rate scoring.
+(the shipped floor). In-play is a different regime: goals move the
+consensus 8pp+ within seconds.
 - `PREMATCH_HOURS` — hours of pre-kickoff odds history the backtest pulls
   (default 3).
 - `ODDS_MARKET_REGEX` — which `SuperOddsType` values count as the
