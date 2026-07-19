@@ -19,6 +19,7 @@ src/
   backtest.ts     runs detector on completed fixtures, grades hit rate + CLV
   tune.ts         offline grid search over window/z-score on the cached data
   live.ts         auto-discovers fixtures, flags moves, attaches on-chain proofs
+  dashboard.ts    zero-dependency live web dashboard served by the watcher
 idl/txoracle.json   Anchor IDL (devnet build, from github.com/txodds/tx-on-chain)
 types/txoracle.ts   generated program types (same source)
 ```
@@ -112,9 +113,15 @@ fixtures itself**: it polls the fixtures feed, attaches to anything from
 when done — zero manual input from deploy onward. Set `LIVE_FIXTURE_IDS`
 to pin an explicit list instead.
 
-Each poll (every 60 s, matching the free delayed tier) prints a heartbeat
-line with tick counts and current implied probabilities, so a quiet market
-is visibly different from a stalled process. When a move is flagged, the
+The watcher also serves a **live dashboard at http://localhost:8787**
+(port via `DASHBOARD_PORT`): auto-scaled probability charts per watched
+fixture, current prices, and a feed of flagged moves with their z-scores
+and on-chain proof status. Zero dependencies — one self-contained page
+polling the watcher's own `/state` endpoint every 5 s.
+
+Each poll (every 60 s, matching the free delayed tier) also prints a
+heartbeat line with tick counts and current implied probabilities, so a
+quiet market is visibly different from a stalled process. When a move is flagged, the
 watcher also fetches the **on-chain Merkle proof** for the exact tick that
 completed the move (`/api/odds/validation`): the proof hashes reconstruct
 the batch root TxODDS commits on Solana, making every flagged signal

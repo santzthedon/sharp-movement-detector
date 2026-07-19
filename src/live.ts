@@ -21,6 +21,7 @@ dotenv.config();
 import { fetchRecentOdds, fetchFixtures, fetchOddsProof, FixtureInfo } from "./oddsClient";
 import { detectSharpMoves } from "./detector";
 import { OddsPoint, FlaggedMove } from "./types";
+import { startDashboard, DashboardFlag, DashboardState } from "./dashboard";
 
 const PINNED_FIXTURE_IDS = (process.env.LIVE_FIXTURE_IDS || "")
   .split(",")
@@ -57,6 +58,46 @@ const buffers = new Map<string, OddsPoint[]>();
 const watchlist = new Map<string, string>(); // fixtureId -> display label
 let lastDiscovery = 0;
 let polling = false;
+
+// State the dashboard renders. Flags are kept newest-first, capped at 50.
+const dashboardFlags: DashboardFlag[] = [];
+const startedAt = Date.now();
+
+/** Downsample a series to ~150 points so the dashboard payload stays small. */
+function downsample(pts: OddsPoint[]): [number, number][] {
+  const step = Math.max(1, Math.floor(pts.length / 150));
+  const out: [number, number][] = [];
+  for (let i = 0; i < pts.length; i += step) {
+    out.push([pts[i].timestamp, 1 / pts[i].decimalOdds]);
+  }
+  if (pts.length) out.push([pts[pts.length - 1].timestamp, 1 / pts[pts.length - 1].decimalOdds]);
+  return out;
+}
+
+function dashboardState(): DashboardState {
+  const fixtures = [...watchlist.entries()].map(([fixtureId, label]) => {
+    const odds = buffers.get(fixtureId) ?? [];
+    const bySel = new Map<string, OddsPoint[]>();
+    for (const p of odds) {
+      if (!bySel.has(p.selection)) bySel.set(p.selection, []);
+      bySel.get(p.selection)!.push(p);
+    }
+    const latest: Record<string, number> = {};
+    const series: Record<string, [number, number][]> = {};
+    for (const [sel, pts] of bySel) {
+      latest[sel] = 1 / pts[pts.length - 1].decimalOdds;
+      series[sel] = downsample(pts);
+    }
+    return { fixtureId, label, ticksInWindow: odds.length, latest, series };
+  });
+  return {
+    startedAt,
+    mode: PINNED_FIXTURE_IDS.length > 0 ? "pinned fixtures" : "auto-discovery",
+    settings: `window ${WINDOW_MINUTES}min, floor ${PROBABILITY_THRESHOLD * 100}pp, z=${Z_SCORE || "off"}`,
+    fixtures,
+    flags: dashboardFlags,
+  };
+}
 
 async function refreshWatchlist(jwt: string, apiToken: string) {
   if (PINNED_FIXTURE_IDS.length > 0) {
@@ -170,6 +211,19 @@ async function pollAll(jwt: string, apiToken: string) {
           `over ${((flag.windowEnd - flag.windowStart) / 60_000).toFixed(1)} min${z}`
       );
 
+      const dashFlag: DashboardFlag = {
+        at: flag.windowEnd,
+        fixtureLabel: label,
+        selection: flag.selection,
+        from: flag.startingProbability,
+        to: flag.peakProbability,
+        minutes: (flag.windowEnd - flag.windowStart) / 60_000,
+        zScore: flag.zScore,
+        proof: flag.messageId ? "pending..." : undefined,
+      };
+      dashboardFlags.unshift(dashFlag);
+      if (dashboardFlags.length > 50) dashboardFlags.pop();
+
       // Anchor the flag: fetch the Merkle proof tying the exact tick that
       // completed this move to the batch root TxODDS commits on Solana.
       // This makes the signal independently verifiable - nobody, including
@@ -177,16 +231,17 @@ async function pollAll(jwt: string, apiToken: string) {
       if (flag.messageId) {
         try {
           const proof = await fetchOddsProof(flag.messageId, flag.windowEnd, jwt, apiToken);
-          console.log(
-            `    on-chain proof: ${proof.proofNodes} Merkle nodes` +
-              (proof.batchRoot ? `, batch root ${String(proof.batchRoot).slice(0, 16)}...` : "") +
-              ` (messageId ${flag.messageId})`
-          );
+          const desc =
+            `${proof.proofNodes} Merkle nodes` +
+            (proof.batchRoot ? `, batch root ${String(proof.batchRoot).slice(0, 16)}...` : "");
+          console.log(`    on-chain proof: ${desc} (messageId ${flag.messageId})`);
+          dashFlag.proof = desc;
         } catch (err: any) {
           console.log(
             `    on-chain proof unavailable (${err?.response?.status ?? err?.message}) - ` +
               `tick may not be batched yet`
           );
+          dashFlag.proof = "not yet batched on-chain";
         }
       }
     }
@@ -210,6 +265,8 @@ async function main() {
           `to ${TAIL_MS / 3_600_000}h after, every ${POLL_INTERVAL_MS / 1000}s ` +
           `(window=${WINDOW_MINUTES}min, floor=${PROBABILITY_THRESHOLD * 100}%, z=${Z_SCORE || "off"})...`
   );
+
+  startDashboard(Number(process.env.DASHBOARD_PORT || 8787), dashboardState);
 
   await pollOnce(jwt, apiToken);
   setInterval(() => pollOnce(jwt, apiToken), POLL_INTERVAL_MS);
