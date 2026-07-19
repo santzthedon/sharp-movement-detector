@@ -5,6 +5,12 @@ swings in implied win probability, and — the part the brief actually asks
 for — checks after the fact whether those flagged moves pointed toward the
 real winner.
 
+**Live replay explorer: https://santzthedon.github.io/sharp-movement-detector/**
+— browse every World Cup 2026 match, see each flagged sharp move on the
+probability chart, and how it was graded (hit + closing-line value).
+Rebuild it any time with `npm run export:site` (reads the backtest cache,
+writes `docs/`).
+
 ## What's here
 
 ```
