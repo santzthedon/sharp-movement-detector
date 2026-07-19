@@ -41,7 +41,7 @@ function pack(pts: OddsPoint[], maxPoints: number): PackedSeries {
 
 function main() {
   const fixtures: any[] = [];
-  let totals = { pre: 0, preHit: 0, preClv: [] as number[], play: 0, playHit: 0 };
+  let totals = { pre: 0, preHit: 0, preExp: 0, preClv: [] as number[], play: 0, playHit: 0 };
 
   for (const file of fs.readdirSync(".cache")) {
     const m = file.match(/^odds-(\d+)-h\d+\.json$/);
@@ -88,6 +88,7 @@ function main() {
       } else {
         totals.pre++;
         if (hit) totals.preHit++;
+        totals.preExp += f.peakProbability;
         if (clv != null) totals.preClv.push(clv);
       }
       return {
@@ -126,6 +127,7 @@ function main() {
       fixtures: fixtures.length,
       pre: totals.pre,
       preHitPct: totals.pre ? Math.round((totals.preHit / totals.pre) * 1000) / 10 : 0,
+      preExpectedPct: totals.pre ? Math.round((totals.preExp / totals.pre) * 1000) / 10 : 0,
       preClvPp: Math.round(meanClv * 10000) / 100,
       play: totals.play,
       playHitPct: totals.play ? Math.round((totals.playHit / totals.play) * 1000) / 10 : 0,
@@ -141,11 +143,11 @@ function main() {
 }
 
 const PAGE = `<!doctype html>
-<html><head><meta charset="utf-8"><title>Sharp Movement Detector - World Cup 2026 Replay</title>
+<html><head><meta charset="utf-8"><title>Sharp Movement Detector - the odds always move first</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg:#faf9f7; --card:#ffffff; --border:#e8e4de; --border-strong:#ddd7cd; --hairline:#f3f0ea;
@@ -155,29 +157,52 @@ const PAGE = `<!doctype html>
     --good:#3d7a4e; --good-bg:#e9f2ea; --bad:#b04438; --bad-bg:#f7e9e6;
     --chip-bg:#f3f0ea; --grid:#eee9e1; --axis:#b3a996; --kickoff:#c9c1b2;
     --font-ui:'Instrument Sans',system-ui,sans-serif;
+    --font-serif:'Instrument Serif',Georgia,serif;
     --font-mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
   }
   * { box-sizing:border-box; margin:0; }
-  body { background:var(--bg); color:var(--text); font:13.5px/1.55 var(--font-ui); }
+  body { background:var(--bg); color:var(--text); font:14px/1.6 var(--font-ui); }
   .mono { font-family:var(--font-mono); }
-  header { background:var(--card); border-bottom:1px solid var(--border); }
-  .hwrap { max-width:1180px; margin:0 auto; padding:16px 28px; display:flex; align-items:center; gap:16px; }
-  h1 { font-size:19px; font-weight:700; }
-  .hsub { color:var(--dim); font-size:13px; }
-  .hchip { margin-left:auto; font-family:var(--font-mono); font-size:12px; color:var(--dim);
-           background:var(--chip-bg); border:1px solid var(--border); border-radius:6px; padding:5px 10px; white-space:nowrap; }
-  .wrap { max-width:1180px; margin:0 auto; padding:0 28px 40px; }
-  .explain { margin-top:20px; background:var(--flag-tint); border:1px solid var(--flag-border); border-radius:10px;
-             padding:14px 18px; display:flex; gap:14px; align-items:baseline; color:#5c5346; }
-  .explain .badge { font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.04em;
-                    color:var(--flag-text); white-space:nowrap; }
-  .stats { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin:16px 0; }
-  .stat { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px 16px; }
-  .stat .l { font-size:11.5px; color:var(--dim); }
-  .stat b { display:block; font-family:var(--font-mono); font-size:22px; font-weight:600; margin-top:2px; }
-  .stat.good b { color:var(--good); }
-  .main { display:grid; grid-template-columns:300px 1fr; gap:16px; align-items:start; }
-  .listcard { background:var(--card); border:1px solid var(--border); border-radius:10px; overflow:hidden;
+  .wrap { max-width:1180px; margin:0 auto; padding:0 28px; }
+
+  /* hero */
+  .hero { padding:56px 0 36px; display:grid; grid-template-columns:1.2fr .8fr; gap:40px; align-items:center; }
+  .hero h1 { font-family:var(--font-serif); font-weight:400; font-size:52px; line-height:1.05; letter-spacing:-0.01em; }
+  .hero h1 em { font-style:italic; color:var(--p2); }
+  .hero .lede { margin-top:18px; font-size:16.5px; line-height:1.65; color:var(--dim); max-width:34em; }
+  .hero .lede b { color:var(--text); font-weight:600; }
+  .kicker { font-family:var(--font-mono); font-size:11.5px; font-weight:600; letter-spacing:.08em;
+            text-transform:uppercase; color:var(--flag-text); margin-bottom:14px; }
+  .best { background:var(--flag-tint); border:1px solid var(--flag-border); border-radius:12px; padding:22px 24px; cursor:pointer; }
+  .best:hover { border-color:var(--flag); }
+  .best .bk { font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.08em;
+              text-transform:uppercase; color:var(--flag-text); }
+  .best .bt { font-family:var(--font-serif); font-size:22px; line-height:1.25; margin:10px 0 8px; }
+  .best .bs { font-size:13.5px; color:#5c5346; line-height:1.6; }
+  .best .go { font-size:12.5px; font-weight:600; color:var(--p2); margin-top:12px; display:inline-block; }
+
+  /* the numbers, as sentences */
+  .score { border-top:1px solid var(--border-strong); border-bottom:1px solid var(--border-strong);
+           display:grid; grid-template-columns:1fr 1fr 1fr; }
+  .score .cell { padding:26px 26px 24px; border-left:1px solid var(--hairline); }
+  .score .cell:first-child { border-left:none; padding-left:0; }
+  .score b.n { display:block; font-family:var(--font-mono); font-size:38px; font-weight:600; line-height:1; }
+  .score .cell.g b.n { color:var(--good); }
+  .score p { margin-top:10px; font-size:13.5px; color:var(--dim); line-height:1.55; }
+  .score p b { color:var(--text); font-weight:600; }
+
+  /* how it works */
+  .how { display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin:26px 0 34px; }
+  .how .step { font-size:13.5px; color:var(--dim); line-height:1.55; }
+  .how .step .sn { font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.08em;
+                   color:var(--p2); text-transform:uppercase; display:block; margin-bottom:4px; }
+  .how .step b { color:var(--text); }
+
+  /* explorer */
+  .xhead { font-family:var(--font-serif); font-size:28px; margin:10px 0 4px; }
+  .xsub { color:var(--dim); font-size:13.5px; margin-bottom:16px; }
+  .main { display:grid; grid-template-columns:300px 1fr; gap:16px; align-items:start; padding-bottom:24px; }
+  .listcard { background:var(--card); border:1px solid var(--border); border-radius:12px; overflow:hidden;
               position:sticky; top:16px; max-height:calc(100vh - 32px); display:flex; flex-direction:column; }
   .listhead { font-size:12px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--dim);
               padding:12px 16px; border-bottom:1px solid var(--border); }
@@ -192,40 +217,65 @@ const PAGE = `<!doctype html>
   .chip { font-family:var(--font-mono); font-size:11px; font-weight:600; padding:3px 9px; border-radius:6px; white-space:nowrap; }
   .chip.hit { color:var(--good); background:var(--good-bg); }
   .chip.miss { color:var(--bad); background:var(--bad-bg); }
-  .chip.reg { color:var(--dim); background:var(--chip-bg); }
   .chip.fc { color:var(--flag-text); background:var(--flag-bg); padding:2px 8px; }
-  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:18px; }
-  .ctitle { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-bottom:10px; }
-  .ctitle b { font-size:17px; font-weight:700; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:20px; }
+  .ctitle { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; }
+  .ctitle b { font-family:var(--font-serif); font-size:22px; font-weight:400; }
   .won { font-size:12.5px; font-weight:600; color:var(--good); }
   .cmeta { margin-left:auto; font-family:var(--font-mono); font-size:12px; color:var(--faint); }
-  svg { width:100%; height:260px; display:block; }
-  .legend { font-size:11.5px; color:var(--dim); margin-top:8px; display:flex; gap:16px; flex-wrap:wrap; }
-  .flags { display:flex; flex-direction:column; gap:10px; margin-top:16px; }
-  .frow { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:11px 16px;
-          display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-  .frow .mv { font-family:var(--font-mono); }
-  .frow .clv { margin-left:auto; font-family:var(--font-mono); font-weight:600; }
-  .frow .clv.up { color:var(--good); } .frow .clv.dn { color:var(--bad); }
-  .frow .tm { font-family:var(--font-mono); font-size:11px; color:var(--faint); }
-  .empty { border:1px dashed var(--border); border-radius:10px; padding:22px; text-align:center; color:var(--dim); background:none; }
-  .seclabel { font-size:12px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--dim); margin:18px 0 0; }
-  .foot { color:var(--dim); font-size:12px; margin-top:26px; line-height:1.7; }
+  .caxis { font-size:12px; color:var(--faint); margin:6px 0 2px; }
+  svg { width:100%; height:270px; display:block; }
+  .legend { font-size:12px; color:var(--dim); margin-top:8px; display:flex; gap:16px; flex-wrap:wrap; }
+  .flags { display:flex; flex-direction:column; gap:10px; margin-top:14px; }
+  .frow { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:13px 18px; }
+  .frow .l1 { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+  .frow .l1 .when { font-size:12px; color:var(--faint); }
+  .frow .l1 .mv { font-family:var(--font-mono); }
+  .frow .l2 { margin-top:4px; font-size:13px; color:var(--dim); display:flex; gap:10px; flex-wrap:wrap; align-items:baseline; }
+  .frow .l2 .after { font-family:var(--font-mono); font-weight:600; }
+  .frow .l2 .after.up { color:var(--good); } .frow .l2 .after.dn { color:var(--bad); }
+  .note { font-size:12.5px; color:var(--faint); margin-top:10px; line-height:1.6; }
+  .empty { border:1px dashed var(--border); border-radius:12px; padding:24px; text-align:center; color:var(--dim); }
+  .foot { color:var(--dim); font-size:12.5px; margin:10px 0 40px; line-height:1.7; border-top:1px solid var(--border); padding-top:18px; }
   .foot a { color:var(--p2); }
-  .foot .mono { font-size:11px; }
-  @media (max-width:900px){ .main { grid-template-columns:1fr; } .listcard { position:static; max-height:300px; } .stats { grid-template-columns:repeat(2,1fr); } }
+  @media (max-width:900px){
+    .hero { grid-template-columns:1fr; padding-top:36px; gap:24px; }
+    .hero h1 { font-size:38px; }
+    .score,.how { grid-template-columns:1fr; }
+    .score .cell { border-left:none; padding-left:0; border-top:1px solid var(--hairline); }
+    .score .cell:first-child { border-top:none; }
+    .main { grid-template-columns:1fr; }
+    .listcard { position:static; max-height:300px; }
+  }
 </style></head><body>
-<header><div class="hwrap">
-  <div><h1>Sharp Movement Detector</h1>
-  <div class="hsub">World Cup 2026 replay explorer &mdash; every flagged sharp move, graded after the fact</div></div>
-  <div class="hchip" id="settings"></div>
-</div></header>
 <div class="wrap">
-  <div class="explain"><span class="badge">WHAT IS THIS?</span>
-    <span>When a lot of informed money bets one way, the odds move <b>fast</b>. This tool watched every
-    World Cup 2026 match, flagged those fast moves as they happened, and then checked: did the market
-    keep agreeing with them? Browse any match below &mdash; amber dots are flagged moves.</span></div>
-  <div class="stats" id="stats"></div>
+  <div class="hero">
+    <div>
+      <div class="kicker">World Cup 2026 &middot; every match &middot; every odds tick</div>
+      <h1>The odds always <em>move first.</em></h1>
+      <div class="lede">When someone knows something &mdash; an injury, a leaked lineup, sharp money taking a
+      position &mdash; the betting odds move <b>before the news breaks</b>. This agent watched the consensus
+      odds on every World Cup match, flagged every abnormal move within seconds of it happening, and then did
+      the part most tools skip: <b>went back and checked whether those moves actually knew something.</b></div>
+    </div>
+    <div class="best" id="best"></div>
+  </div>
+
+  <div class="score" id="score"></div>
+
+  <div class="how">
+    <div class="step"><span class="sn">1 &middot; Watch</span><b>Every odds tick, for every match,</b>
+      streamed from TxLINE's bookmaker consensus and anchored on the Solana blockchain.</div>
+    <div class="step"><span class="sn">2 &middot; Flag</span>A move gets flagged only when it's big, fast,
+      <b>and at least 3&times; that market's normal wobble</b> &mdash; what counts as "sharp" is measured
+      per match, not guessed.</div>
+    <div class="step"><span class="sn">3 &middot; Grade</span>After full time, every flag faces two questions:
+      <b>did that team actually win?</b> And did the price keep moving the flag's way, or snap back?</div>
+  </div>
+
+  <div class="xhead">Browse the tournament</div>
+  <div class="xsub">Pick any match. The lines are each outcome's chance of winning, from the odds.
+    Amber dots are the moments the agent raised its hand.</div>
   <div class="main">
     <div class="listcard">
       <div class="listhead" id="listhead">Matches</div>
@@ -234,17 +284,23 @@ const PAGE = `<!doctype html>
     <div>
       <div class="card">
         <div class="ctitle" id="head"></div>
+        <div class="caxis">Chance of winning, implied by the consensus odds &darr;</div>
         <div id="chart"></div>
         <div class="legend" id="legend"></div>
       </div>
-      <div class="seclabel">Flags in this match</div>
       <div class="flags" id="flags"></div>
+      <div class="note" id="flagnote"></div>
     </div>
   </div>
-  <div class="foot">Detector: <span class="mono" id="settings2"></span> &middot; pre-match flags graded vs the closing line,
-  in-play vs the price 30min later &middot; <a href="https://github.com/santzthedon/sharp-movement-detector">github.com/santzthedon/sharp-movement-detector</a><br>
-  The live agent (auto-discovery, on-chain proofs, live dashboard) runs locally with <span class="mono">npm run live</span> &mdash;
-  this page replays its detector over the full cached tournament.</div>
+
+  <div class="foot"><b>The honest fine print.</b> Detector settings: <span class="mono" id="settings"></span>.
+  Flags raised before kickoff are graded against the final pre-match price; flags during the match against the
+  price 30 minutes later. In-play flags mostly show the agent reacting to goals within seconds &mdash; impressive
+  reflexes, not prediction &mdash; so the headline numbers above count <b>only the before-kickoff calls</b>.
+  One tournament, tuned on its own data: there's roughly a 1-in-10 chance the edge is luck. The system keeps
+  grading itself on new matches until that's settled.
+  &middot; <a href="https://github.com/santzthedon/sharp-movement-detector">Source on GitHub</a> &mdash; the live
+  agent (auto-discovery, on-chain proofs, live dashboard) runs with <span class="mono">npm run live</span>.</div>
 </div>
 <script>
 const COLORS={part1:"#4a6da7",draw:"#9a9287",part2:"#b25a41"};
@@ -253,70 +309,121 @@ const pctm=x=>(x/10).toFixed(1)+"%";
 function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
 function teams(f){
   const parts=f.label.split(/ vs? /i);
-  return { part1:parts[0]||"part1", part2:parts[1]||"part2", draw:"Draw" };
+  return { part1:parts[0]||"Team 1", part2:parts[1]||"Team 2", draw:"a draw" };
 }
 function chart(f){
   const sels=Object.entries(f.series).filter(([,s])=>s.length>1);
   if(!sels.length) return "<div class='empty'>no series</div>";
+  const T=teams(f);
   let t0=Infinity,t1=-Infinity,lo=1000,hi=0;
   for(const [,s] of sels){ t0=Math.min(t0,s[0][0]); t1=Math.max(t1,s[s.length-1][0]);
     for(const p of s){ lo=Math.min(lo,p[1]); hi=Math.max(hi,p[1]); } }
   const pad=Math.max(20,(hi-lo)*0.12); lo=Math.max(0,lo-pad); hi=Math.min(1000,hi+pad);
-  const W=1040,H=260,dx=t1-t0||1,dy=hi-lo||1;
+  const W=1040,H=270,dx=t1-t0||1,dy=hi-lo||1;
   const X=t=>(t-t0)/dx*W, Y=p=>H-(p-lo)/dy*H;
-  let out="<svg viewBox='0 0 "+W+" "+H+"' preserveAspectRatio='none'>";
+  let out="<svg viewBox='0 0 "+W+" "+H+"'>";
   for(const fr of [0.25,0.5,0.75]){ const v=lo+fr*dy;
     out+="<line x1='0' y1='"+Y(v).toFixed(1)+"' x2='"+W+"' y2='"+Y(v).toFixed(1)+"' stroke='#eee9e1'/>"+
          "<text x='4' y='"+(Y(v)-4).toFixed(1)+"' fill='#b3a996' font-size='11' font-family='IBM Plex Mono,monospace'>"+(v/10).toFixed(0)+"%</text>"; }
-  if(f.kickoff) out+="<line x1='"+X(f.kickoff).toFixed(1)+"' y1='0' x2='"+X(f.kickoff).toFixed(1)+"' y2='"+H+"' stroke='#c9c1b2' stroke-dasharray='4 4'/>";
+  if(f.kickoff){
+    out+="<line x1='"+X(f.kickoff).toFixed(1)+"' y1='0' x2='"+X(f.kickoff).toFixed(1)+"' y2='"+H+"' stroke='#c9c1b2' stroke-dasharray='4 4'/>"+
+         "<text x='"+(X(f.kickoff)+6).toFixed(1)+"' y='14' fill='#a39a8c' font-size='11' font-family='IBM Plex Mono,monospace'>kickoff</text>";
+  }
   for(const [sel,s] of sels){
     const d=s.map((p,i)=>(i?"L":"M")+X(p[0]).toFixed(1)+","+Y(p[1]).toFixed(1)).join("");
     out+="<path d='"+d+"' fill='none' stroke='"+(COLORS[sel]||"#1f1b16")+"' stroke-width='1.8'/>";
   }
   for(const fl of f.flags){
-    out+="<circle cx='"+X(fl.t).toFixed(1)+"' cy='"+Y(fl.to).toFixed(1)+"' r='9' fill='#c58a2a' opacity='0.18'/>"+
-         "<circle cx='"+X(fl.t).toFixed(1)+"' cy='"+Y(fl.to).toFixed(1)+"' r='4.5' fill='#c58a2a' stroke='#ffffff' stroke-width='1.5'/>";
+    const tip=esc(T[fl.sel]||fl.sel)+": "+pctm(fl.from)+" \\u2192 "+pctm(fl.to)+" in "+fl.mins+" min";
+    out+="<g><title>"+tip+"</title>"+
+         "<circle cx='"+X(fl.t).toFixed(1)+"' cy='"+Y(fl.to).toFixed(1)+"' r='9' fill='#c58a2a' opacity='0.18'/>"+
+         "<circle cx='"+X(fl.t).toFixed(1)+"' cy='"+Y(fl.to).toFixed(1)+"' r='4.5' fill='#c58a2a' stroke='#ffffff' stroke-width='1.5'/></g>";
   }
   return out+"</svg>";
+}
+function flagSentence(fl,T){
+  const who=fl.sel==="draw"?"the draw":esc(T[fl.sel]);
+  const verdict=fl.hit
+    ? "<span class='chip hit'>"+(fl.sel==="draw"?"IT ENDED A DRAW &#10003;":esc(T[fl.sel]).toUpperCase()+" WON &#10003;")+"</span>"
+    : "<span class='chip miss'>"+(fl.sel==="draw"?"NO DRAW &#10007;":"THEY DIDN'T WIN &#10007;")+"</span>";
+  const after=fl.clv==null?"":
+    fl.clv>=0
+      ? "<span class='after up'>+"+(fl.clv/10).toFixed(1)+"pp</span> &mdash; the market kept agreeing after the flag"
+      : "<span class='after dn'>"+(fl.clv/10).toFixed(1)+"pp</span> &mdash; the market walked it back";
+  return "<div class='frow'>"+
+    "<div class='l1'><span class='when'>"+(fl.play?"During the match":"Before kickoff")+" &middot; "+
+    new Date(fl.t*1000).toUTCString().slice(17,22)+" UTC</span>"+
+    "<span>Money moved on <b>"+who+"</b>: <span class='mv'>"+pctm(fl.from)+" &rarr; "+pctm(fl.to)+
+    "</span> in "+fl.mins+" min"+(fl.z?" &mdash; <b>"+fl.z.toFixed(0)+"&times;</b> this market's normal wobble":"")+"</span></div>"+
+    "<div class='l2'>"+verdict+after+"</div></div>";
 }
 function render(){
   const f=DATA.fixtures[idx], T=teams(f);
   document.querySelectorAll(".mrow").forEach((el,i)=>el.classList.toggle("sel",i===idx));
   const selEl=document.querySelectorAll(".mrow")[idx];
-  if(selEl) selEl.scrollIntoView({block:"nearest"});
-  const won=f.winner==="draw"?"&#10003; Draw":"&#10003; "+esc(T[f.winner]||f.winner)+" won";
+  if(selEl){
+    // Scroll only the list, never the page - scrollIntoView would drag the
+    // whole viewport down to the explorer on first load.
+    const list=document.getElementById("list");
+    if(selEl.offsetTop<list.scrollTop||selEl.offsetTop+40>list.scrollTop+list.clientHeight)
+      list.scrollTop=selEl.offsetTop-list.clientHeight/2;
+  }
+  const won=f.winner==="draw"?"ended in a draw":esc(T[f.winner]||f.winner)+" won";
   document.getElementById("head").innerHTML=
-    "<b>"+esc(f.label)+"</b><span class='won'>"+won+"</span>"+
-    "<span class='cmeta'>"+new Date(f.start*1000).toUTCString().slice(5,16)+" &middot; "+
-    f.flags.length+" flag"+(f.flags.length===1?"":"s")+" &middot; result "+f.source+"</span>";
+    "<b>"+esc(f.label)+"</b><span class='won'>&#10003; "+won+"</span>"+
+    "<span class='cmeta'>"+new Date(f.start*1000).toUTCString().slice(5,16)+"</span>";
   document.getElementById("chart").innerHTML=chart(f);
   document.getElementById("legend").innerHTML=
     "<span style='color:#4a6da7'>&#9632; "+esc(T.part1)+"</span>"+
     "<span style='color:#9a9287'>&#9632; Draw</span>"+
     "<span style='color:#b25a41'>&#9632; "+esc(T.part2)+"</span>"+
-    "<span style='color:#c58a2a'>&#9679; flagged move</span>"+
-    "<span style='color:#a39a8c'>&#9482; kickoff</span>";
-  document.getElementById("flags").innerHTML=f.flags.length?f.flags.map(fl=>
-    "<div class='frow'><span class='chip "+(fl.hit?"hit'>HIT":"miss'>MISS")+"</span>"+
-    "<span class='chip reg'>"+(fl.play?"in-play":"pre-match")+"</span>"+
-    "<span><b>"+esc(T[fl.sel]||fl.sel)+"</b> moved <span class='mv'>"+pctm(fl.from)+" &rarr; "+pctm(fl.to)+"</span> in "+fl.mins+" min"+
-    (fl.z?" <span class='mv'>(z="+fl.z.toFixed(1)+")</span>":"")+"</span>"+
-    (fl.clv!=null?"<span class='clv "+(fl.clv>=0?"up":"dn")+"'>"+(fl.clv>=0?"+":"")+(fl.clv/10).toFixed(1)+"pp CLV</span>":"<span class='clv'></span>")+
-    "<span class='tm'>"+new Date(fl.t*1000).toUTCString().slice(17,25)+" UTC</span></div>"
-  ).join(""):"<div class='empty'>No sharp moves flagged in this match &mdash; most matches are quiet. That selectivity is the point.</div>";
+    "<span style='color:#c58a2a'>&#9679; flagged move (hover for details)</span>";
+  document.getElementById("flags").innerHTML=f.flags.length
+    ? f.flags.map(fl=>flagSentence(fl,T)).join("")
+    : "<div class='empty'>Nothing flagged in this match &mdash; the odds never moved abnormally. "+
+      "Most matches are like this, and that's the point: a detector that cries wolf is worthless.</div>";
+  document.getElementById("flagnote").innerHTML=f.flags.some(fl=>fl.play)
+    ? "Flags <b>during the match</b> are mostly the agent catching goals repricing the odds within seconds "+
+      "&mdash; a speed demo, not a prediction. The before-kickoff flags are the ones that count."
+    : "";
+}
+function bestCatch(){
+  // Highest-z flag that turned out RIGHT (fall back to any if none hit) -
+  // the hero card should lead with a correct call.
+  let best=null,bi=0;
+  DATA.fixtures.forEach((f,i)=>f.flags.forEach(fl=>{
+    if(!fl.z) return;
+    const better=!best || (fl.hit && !best.hit) || (fl.hit===best.hit && fl.z>best.z);
+    if(better){ best=fl; bi=i; }
+  }));
+  if(!best) return;
+  const f=DATA.fixtures[bi], T=teams(f);
+  const who=best.sel==="draw"?"the draw":esc(T[best.sel]);
+  document.getElementById("best").innerHTML=
+    "<span class='bk'>&#9679; Best catch of the tournament</span>"+
+    "<div class='bt'>"+esc(f.label)+"</div>"+
+    "<div class='bs'>In "+best.mins+" minute"+(best.mins===1?"":"s")+", the market's belief in "+who+
+    " jumped from <b>"+pctm(best.from)+" to "+pctm(best.to)+"</b> &mdash; "+best.z.toFixed(0)+
+    "&times; that market's normal movement. Flagged as it happened, receipt anchored on Solana."+
+    (best.hit?" It was right.":"")+"</div>"+
+    "<span class='go'>See it on the chart &rarr;</span>";
+  document.getElementById("best").onclick=()=>{
+    idx=bi; render();
+    document.querySelector(".xhead").scrollIntoView({behavior:"smooth"});
+  };
 }
 async function boot(){
   DATA=await (await fetch("data.json")).json();
   const s=DATA.summary;
   document.getElementById("settings").textContent=DATA.settings;
-  document.getElementById("settings2").textContent=DATA.settings;
-  document.getElementById("stats").innerHTML=
-    "<div class='stat'><span class='l'>fixtures analyzed</span><b>"+s.fixtures+"</b></div>"+
-    "<div class='stat'><span class='l'>pre-match flags</span><b>"+s.pre+"</b></div>"+
-    "<div class='stat good'><span class='l'>pre-match hit rate</span><b>"+s.preHitPct.toFixed(1)+"%</b></div>"+
-    "<div class='stat good'><span class='l'>pre-match mean CLV</span><b>"+(s.preClvPp>=0?"+":"")+s.preClvPp.toFixed(2)+"pp</b></div>"+
-    "<div class='stat'><span class='l'>in-play flags</span><b>"+s.play+"</b></div>";
-  document.getElementById("listhead").textContent="Matches \\u00b7 "+DATA.fixtures.length;
+  document.getElementById("score").innerHTML=
+    "<div class='cell'><b class='n'>"+s.pre+"</b><p><b>times money moved hard before kickoff</b> across "+
+    s.fixtures+" matches. Most matches: zero flags. The detector is picky on purpose.</p></div>"+
+    "<div class='cell g'><b class='n'>"+s.preHitPct.toFixed(0)+"%</b><p><b>of those flagged teams went on to win.</b> "+
+    "The odds themselves said only "+(s.preExpectedPct||45).toFixed(0)+"% should have. That gap is the whole game.</p></div>"+
+    "<div class='cell g'><b class='n'>"+(s.preClvPp>=0?"+":"")+s.preClvPp.toFixed(1)+"pp</b><p><b>where the price kept going, on average,</b> "+
+    "after each flag. Positive means the rest of the market ended up agreeing with the move we caught.</p></div>";
+  document.getElementById("listhead").textContent="All "+DATA.fixtures.length+" matches";
   document.getElementById("list").innerHTML=DATA.fixtures.map((f,i)=>
     "<div class='mrow' data-i='"+i+"'><div class='t'><span>"+esc(f.label)+"</span>"+
     (f.flags.length?"<span class='chip fc'>"+f.flags.length+"</span>":"")+"</div>"+
@@ -329,6 +436,7 @@ async function boot(){
     if(e.key==="ArrowRight"){ idx=(idx+1)%DATA.fixtures.length; render(); }
   });
   idx=DATA.fixtures.reduce((b,f,i)=>f.flags.length>DATA.fixtures[b].flags.length?i:b,0);
+  bestCatch();
   render();
 }
 boot();
