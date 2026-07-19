@@ -94,6 +94,7 @@ function dashboardState(): DashboardState {
     startedAt,
     mode: PINNED_FIXTURE_IDS.length > 0 ? "pinned fixtures" : "auto-discovery",
     settings: `window ${WINDOW_MINUTES}min, floor ${PROBABILITY_THRESHOLD * 100}pp, z=${Z_SCORE || "off"}`,
+    pollSeconds: Math.round(POLL_INTERVAL_MS / 1000),
     fixtures,
     flags: dashboardFlags,
   };

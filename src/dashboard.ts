@@ -2,7 +2,8 @@
  * Zero-dependency live dashboard. The watcher (live.ts) calls
  * startDashboard() with a state callback; this serves a single
  * self-contained HTML page at / and JSON at /state, which the page polls
- * every 5s. No frameworks, no CDN - everything inline, works offline.
+ * every 5s. No frameworks, no build step - Google Fonts load when online
+ * and fall back to system fonts offline.
  */
 import * as http from "http";
 
@@ -31,45 +32,78 @@ export interface DashboardState {
   startedAt: number;
   mode: string;
   settings: string;
+  pollSeconds?: number;
   fixtures: DashboardFixture[];
   flags: DashboardFlag[];
 }
 
 const PAGE = `<!doctype html>
-<html><head><meta charset="utf-8"><title>Sharp Movement Detector</title>
+<html><head><meta charset="utf-8"><title>Sharp Movement Detector - Live</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root { --bg:#0d1117; --card:#161b22; --border:#30363d; --text:#e6edf3; --dim:#8b949e;
-          --p1:#58a6ff; --draw:#8b949e; --p2:#f78166; --flag:#d29922; --good:#3fb950; }
+  :root {
+    --bg:#faf9f7; --card:#ffffff; --border:#e8e4de; --border-strong:#ddd7cd; --hairline:#f3f0ea;
+    --text:#1f1b16; --dim:#7a7266; --faint:#a39a8c;
+    --p1:#4a6da7; --draw:#9a9287; --p2:#b25a41;
+    --flag:#c58a2a; --flag-bg:#f6e8cd; --flag-tint:#fdf6ec; --flag-border:#ecdcc0; --flag-text:#a07021;
+    --good:#3d7a4e; --good-bg:#e9f2ea; --bad:#b04438; --bad-bg:#f7e9e6;
+    --chip-bg:#f3f0ea; --grid:#eee9e1; --axis:#b3a996;
+    --font-ui:'Instrument Sans',system-ui,sans-serif;
+    --font-mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
+  }
   * { box-sizing:border-box; margin:0; }
-  body { background:var(--bg); color:var(--text); font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; padding:20px; }
-  h1 { font-size:18px; margin-bottom:4px; }
-  .sub { color:var(--dim); font-size:12px; margin-bottom:20px; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(420px,1fr)); gap:14px; }
-  .card { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:14px; }
-  .card h2 { font-size:14px; margin-bottom:8px; }
-  .probs { display:flex; gap:14px; font-size:13px; margin-bottom:8px; }
-  .p1 { color:var(--p1); } .draw { color:var(--draw); } .p2 { color:var(--p2); }
-  svg { width:100%; height:110px; display:block; }
-  .flags { margin-top:22px; }
-  .flag { border-left:3px solid var(--flag); padding:6px 10px; margin-bottom:8px; background:var(--card);
-          border-radius:0 6px 6px 0; font-size:13px; }
-  .flag .meta { color:var(--dim); font-size:11px; }
-  .flag .proof { color:var(--good); font-size:11px; }
-  .empty { color:var(--dim); padding:30px; text-align:center; border:1px dashed var(--border); border-radius:8px; }
-  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--good);
-         margin-right:6px; animation:pulse 2s infinite; }
+  body { background:var(--bg); color:var(--text); font:13.5px/1.55 var(--font-ui); padding:24px 28px; max-width:1100px; margin:0 auto; }
+  .mono { font-family:var(--font-mono); }
+  .head { display:flex; align-items:baseline; gap:12px; margin-bottom:18px; flex-wrap:wrap; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--good); align-self:center;
+         animation:pulse 2s infinite; }
   @keyframes pulse { 50% { opacity:.3; } }
+  h1 { font-size:17px; font-weight:700; }
+  .hsub { color:var(--dim); font-size:13px; }
+  .hchip { margin-left:auto; font-family:var(--font-mono); font-size:12px; color:var(--dim);
+           background:var(--chip-bg); border:1px solid var(--border); border-radius:6px; padding:5px 10px; white-space:nowrap; }
+  .grid { display:grid; grid-template-columns:repeat(2,1fr); gap:14px; }
+  @media (max-width:760px){ .grid { grid-template-columns:1fr; } body { padding:16px; } }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:16px; }
+  .card h2 { font-size:14.5px; font-weight:700; display:flex; align-items:baseline; }
+  .card h2 .ticks { margin-left:auto; font-family:var(--font-mono); font-size:11px; font-weight:400; color:var(--faint); }
+  .probs { display:flex; gap:16px; font-family:var(--font-mono); font-size:13px; margin:8px 0; flex-wrap:wrap; }
+  .c1 { color:var(--p1); } .cd { color:var(--draw); } .c2 { color:var(--p2); }
+  svg { width:100%; height:90px; display:block; }
+  .seclabel { font-size:12px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--dim); margin:24px 0 10px; }
+  .flag { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:11px 16px;
+          display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+  .chip { font-family:var(--font-mono); font-size:11px; font-weight:600; padding:3px 9px; border-radius:6px; }
+  .chip.amber { color:var(--flag-text); background:var(--flag-bg); }
+  .flag .mv { font-family:var(--font-mono); }
+  .flag .proof { margin-left:auto; font-family:var(--font-mono); font-size:11.5px; color:var(--good); }
+  .flag .tm { font-family:var(--font-mono); font-size:11px; color:var(--faint); flex-basis:100%; }
+  .empty { border:1px dashed var(--border); border-radius:10px; padding:24px; text-align:center; color:var(--dim); }
 </style></head><body>
-<h1><span class="dot"></span>Sharp Movement Detector</h1>
-<div class="sub" id="sub">connecting...</div>
+<div class="head"><div class="dot"></div><h1>Live watcher</h1>
+  <span class="hsub" id="mode">connecting...</span>
+  <span class="hchip" id="status"></span></div>
 <div class="grid" id="fixtures"></div>
-<div class="flags"><h2 style="font-size:14px;margin-bottom:10px">Flagged sharp moves</h2><div id="flags"></div></div>
+<div class="seclabel">Flagged moves</div>
+<div id="flags"></div>
 <script>
-const COLORS = { part1:"#58a6ff", draw:"#8b949e", part2:"#f78166" };
+const COLORS={part1:"#4a6da7",draw:"#9a9287",part2:"#b25a41"};
+const CLS={part1:"c1",draw:"cd",part2:"c2"};
+function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
 function pct(x){ return (x*100).toFixed(1)+"%"; }
+function teams(label){
+  const p=String(label).split(/ vs? /i);
+  return { part1:p[0]||"part1", part2:p[1]||"part2", draw:"Draw" };
+}
+function updur(t0){
+  const m=Math.floor((Date.now()-t0)/60000);
+  return m>=60 ? Math.floor(m/60)+"h "+(m%60)+"m" : m+"m";
+}
 function spark(series){
-  const all = Object.entries(series).filter(([,pts])=>pts.length>1);
+  const all=Object.entries(series).filter(([,pts])=>pts.length>1);
   if(!all.length) return "<div class='empty' style='padding:10px'>waiting for ticks...</div>";
   let t0=Infinity,t1=-Infinity,lo=1,hi=0;
   for(const [,pts] of all){
@@ -77,43 +111,44 @@ function spark(series){
     for(const p of pts){ lo=Math.min(lo,p[1]); hi=Math.max(hi,p[1]); }
   }
   const pad=Math.max(0.02,(hi-lo)*0.15); lo=Math.max(0,lo-pad); hi=Math.min(1,hi+pad);
-  const W=420,H=110,dx=t1-t0||1,dy=hi-lo||1;
+  const W=460,H=90,dx=t1-t0||1,dy=hi-lo||1;
   const Y=p=>H-(p-lo)/dy*H;
-  let out = "<svg viewBox='0 0 "+W+" "+H+"' preserveAspectRatio='none'>";
-  for(const f of [0.25,0.5,0.75]){
-    const v=lo+f*dy;
-    out += "<line x1='0' y1='"+Y(v).toFixed(1)+"' x2='"+W+"' y2='"+Y(v).toFixed(1)+"' stroke='#21262d'/>"+
-           "<text x='4' y='"+(Y(v)-3).toFixed(1)+"' fill='#484f58' font-size='9'>"+(v*100).toFixed(0)+"%</text>";
-  }
+  const mid=lo+dy/2;
+  let out="<svg viewBox='0 0 "+W+" "+H+"' preserveAspectRatio='none'>"+
+    "<line x1='0' y1='"+Y(mid).toFixed(1)+"' x2='"+W+"' y2='"+Y(mid).toFixed(1)+"' stroke='#eee9e1'/>"+
+    "<text x='4' y='"+(Y(mid)-3).toFixed(1)+"' fill='#b3a996' font-size='9' font-family='IBM Plex Mono,monospace'>"+(mid*100).toFixed(0)+"%</text>";
   for(const [sel,pts] of all){
-    const d = pts.map((p,i)=>(i?"L":"M")+((p[0]-t0)/dx*W).toFixed(1)+","+Y(p[1]).toFixed(1)).join("");
-    out += "<path d='"+d+"' fill='none' stroke='"+(COLORS[sel]||"#e6edf3")+"' stroke-width='1.6'/>";
+    const d=pts.map((p,i)=>(i?"L":"M")+((p[0]-t0)/dx*W).toFixed(1)+","+Y(p[1]).toFixed(1)).join("");
+    out+="<path d='"+d+"' fill='none' stroke='"+(COLORS[sel]||"#1f1b16")+"' stroke-width='1.8'/>";
   }
   return out+"</svg>";
 }
 async function refresh(){
   try{
-    const s = await (await fetch("/state")).json();
-    document.getElementById("sub").textContent =
-      s.mode+" | "+s.settings+" | up since "+new Date(s.startedAt).toLocaleTimeString();
-    const fx = document.getElementById("fixtures");
-    fx.innerHTML = s.fixtures.length ? s.fixtures.map(f =>
-      "<div class='card'><h2>"+f.label+"</h2><div class='probs'>"+
-      Object.entries(f.latest).map(([sel,p])=>"<span class='"+sel+"'>"+sel+" "+pct(p)+"</span>").join("")+
-      "<span style='color:var(--dim);margin-left:auto'>"+f.ticksInWindow+" ticks</span></div>"+
-      spark(f.series)+"</div>"
-    ).join("") : "<div class='empty'>No fixtures in the watch window - standing by. The watcher attaches automatically before kickoff.</div>";
-    const fl = document.getElementById("flags");
-    fl.innerHTML = s.flags.length ? s.flags.map(f =>
-      "<div class='flag'><b>"+f.fixtureLabel+"</b> &rarr; "+f.selection+" "+
-      pct(f.from)+" &rarr; "+pct(f.to)+" over "+f.minutes.toFixed(1)+" min"+
-      (f.zScore?" (z="+f.zScore.toFixed(1)+")":"")+
-      "<div class='meta'>"+new Date(f.at).toLocaleTimeString()+"</div>"+
-      (f.proof?"<div class='proof'>on-chain: "+f.proof+"</div>":"")+"</div>"
-    ).join("") : "<div class='empty'>No sharp moves flagged yet.</div>";
-  }catch(e){ document.getElementById("sub").textContent = "dashboard lost contact with watcher: "+e; }
+    const s=await (await fetch("/state")).json();
+    document.getElementById("mode").textContent=s.mode+" \\u00b7 "+s.settings;
+    document.getElementById("status").textContent="up "+updur(s.startedAt)+" \\u00b7 poll "+(s.pollSeconds||60)+"s";
+    const fx=document.getElementById("fixtures");
+    fx.innerHTML=s.fixtures.length?s.fixtures.map(f=>{
+      const T=teams(f.label);
+      return "<div class='card'><h2>"+esc(f.label)+"<span class='ticks'>"+f.ticksInWindow+" ticks</span></h2>"+
+      "<div class='probs'>"+Object.entries(f.latest).map(([sel,p])=>
+        "<span class='"+(CLS[sel]||"")+"'>"+esc(T[sel]||sel)+" "+pct(p)+"</span>").join("")+"</div>"+
+      spark(f.series)+"</div>";
+    }).join(""):"<div class='empty' style='grid-column:1/-1'>No fixtures in the watch window - standing by. The watcher attaches automatically before kickoff.</div>";
+    const fl=document.getElementById("flags");
+    fl.innerHTML=s.flags.length?s.flags.map(f=>{
+      const T=teams(f.fixtureLabel);
+      return "<div class='flag'><span class='chip amber'>FLAG</span>"+
+      "<span><b>"+esc(f.fixtureLabel)+"</b> \\u00b7 <b>"+esc(T[f.selection]||f.selection)+"</b> "+
+      "<span class='mv'>"+pct(f.from)+" \\u2192 "+pct(f.to)+"</span> over "+f.minutes.toFixed(1)+" min"+
+      (f.zScore?" <span class='mv'>(z="+f.zScore.toFixed(1)+")</span>":"")+"</span>"+
+      (f.proof?"<span class='proof'>\\u26d3 "+esc(f.proof)+"</span>":"")+
+      "<span class='tm'>"+new Date(f.at).toLocaleTimeString()+"</span></div>";
+    }).join(""):"<div class='empty'>No sharp moves flagged yet.</div>";
+  }catch(e){ document.getElementById("mode").textContent="dashboard lost contact with watcher: "+e; }
 }
-refresh(); setInterval(refresh, 5000);
+refresh(); setInterval(refresh,5000);
 </script></body></html>`;
 
 export function startDashboard(port: number, getState: () => DashboardState): void {
